@@ -4,8 +4,8 @@ import { api } from "../../../scripts/api.js";
 /**
  * ComfyUI-MechaBaby-WorkflowTracer
  * 功能：
- * 1. 修复大工作流导出逻辑，确保 100% 成功率
- * 2. 递归回溯逻辑完整性，确保导出流可直接运行
+ * 1. 修复现代节点 (Vue) 下鼠标悬停无法展开序号的问题
+ * 2. 修复循环节点的累计耗时计算逻辑
  * 3. 兼容现代节点 (Vue) 与经典节点的高亮显示
  */
 
@@ -13,16 +13,18 @@ const executionState = {
     enabled: localStorage.getItem("mecha_tracer_enabled") !== "false",
     panelVisible: localStorage.getItem("mecha_tracer_panel_visible") !== "false",
     running: false,
-    nodes: new Map(), 
+    nodes: new Map(), // nodeId -> Array of { order, startTime, endTime, duration }
     orderCounter: 0,
     executedNodes: new Set(),
-    lastNodeId: null
+    lastNodeId: null,
+    hoveredNodeId: null // 新增：手动追踪悬停节点ID
 };
 
 app.registerExtension({
     name: "MechaBaby.WorkflowTracer",
     
     async setup() {
+        // 监听执行开始
         api.addEventListener("execution_start", () => {
             if (!executionState.enabled) return;
             executionState.nodes.clear();
@@ -33,6 +35,7 @@ app.registerExtension({
             app.canvas.draw(true, true);
         });
 
+        // 监听节点执行
         api.addEventListener("executing", ({ detail }) => {
             if (!executionState.enabled) return;
             const nodeId = detail;
@@ -72,18 +75,25 @@ app.registerExtension({
             app.canvas.draw(true, true);
         });
 
+        // --- 核心修复：手动检测鼠标位置以支持现代节点 (Vue) 悬停 ---
+        const self = this;
         const origDrawNode = LGraphCanvas.prototype.drawNode;
         LGraphCanvas.prototype.drawNode = function(node, ctx) {
             origDrawNode.apply(this, arguments);
             if (!executionState.enabled) return;
+            
             const records = executionState.nodes.get(String(node.id));
             if (!records || records.length === 0) return;
+
+            // 获取实时鼠标位置进行判定
+            const canvas = app.canvas;
+            const isMouseOver = canvas.node_over === node || executionState.hoveredNodeId === String(node.id);
 
             ctx.save();
             const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 20;
             const isCurrent = executionState.lastNodeId === String(node.id) && executionState.running;
-            const isMouseOver = app.canvas.node_over === node;
 
+            // 1. 绘制高亮边框
             ctx.strokeStyle = isCurrent ? "#FFFF00" : "#00FF00";
             ctx.lineWidth = isCurrent ? 5 : 3;
             ctx.shadowBlur = isCurrent ? 20 : 10;
@@ -91,9 +101,11 @@ app.registerExtension({
             const margin = 3;
             ctx.strokeRect(-margin, -titleHeight - margin, node.size[0] + margin * 2, node.size[1] + titleHeight + margin * 2);
 
+            // 2. 格式化标签信息
             ctx.shadowBlur = 0;
             ctx.shadowColor = "transparent";
             
+            // 耗时计算：仅当前运行的最后一条记录实时跳秒
             let totalDuration = 0;
             records.forEach((r, idx) => {
                 if (r.duration > 0) {
@@ -103,6 +115,7 @@ app.registerExtension({
                 }
             });
             
+            // 序号显示逻辑：悬停显示完整版
             let orderText = "";
             if (isMouseOver || records.length <= 4) {
                 orderText = records.map(r => `#${r.order}`).join(", ");
@@ -136,6 +149,21 @@ app.registerExtension({
             ctx.restore();
         };
 
+        // 监听鼠标移动以更新 hoveredNodeId
+        const canvasEl = app.canvas.canvas;
+        canvasEl.addEventListener("pointermove", (e) => {
+            if (!executionState.enabled) return;
+            const canvas = app.canvas;
+            const coord = canvas.convertEventToCanvasOffset(e);
+            const node = canvas.graph.getNodeOnPos(coord[0], coord[1]);
+            const newHoverId = node ? String(node.id) : null;
+            if (executionState.hoveredNodeId !== newHoverId) {
+                executionState.hoveredNodeId = newHoverId;
+                canvas.draw(true, true); // 强制重绘以更新标签
+            }
+        });
+
+        // 劫持连线渲染
         const origDrawLink = LGraphCanvas.prototype.drawLink;
         LGraphCanvas.prototype.drawLink = function(ctx, a, b, link, ...args) {
             if (executionState.enabled && link && executionState.executedNodes.has(String(link.origin_id)) && executionState.executedNodes.has(String(link.target_id))) {
@@ -183,7 +211,7 @@ app.registerExtension({
             box-shadow: 0 0 15px rgba(0, 255, 0, 0.3);
             z-index: 99999;
             position: fixed;
-            min-width: 180px;
+            min-width: 170px;
             font-family: sans-serif;
             user-select: none;
         `;
@@ -324,54 +352,138 @@ app.registerExtension({
         }
 
         try {
+            // 1. 深度克隆原始图表数据
             const graphData = JSON.parse(JSON.stringify(app.graph.serialize()));
             const executedIds = new Set(Array.from(executionState.executedNodes).map(id => Number(id)));
             const keepIdsSet = new Set(executedIds);
 
+            // 2. 如果是逻辑完整模式，溯源所有祖先节点
             if (mode === "integrity") {
                 const nodesMap = {};
                 graphData.nodes.forEach(n => nodesMap[n.id] = n);
                 const linksMap = {};
-                graphData.links.forEach(l => linksMap[l[0]] = l);
-
-                const findAncestors = (nodeId) => {
-                    const node = nodesMap[nodeId];
-                    if (!node || !node.inputs) return;
-                    node.inputs.forEach(input => {
-                        if (input.link) {
-                            const link = linksMap[input.link];
-                            if (link && !keepIdsSet.has(link[1])) { // link[1] is origin_id
-                                keepIdsSet.add(link[1]);
-                                findAncestors(link[1]);
-                            }
-                        }
-                    });
-                };
-                Array.from(executedIds).forEach(id => findAncestors(id));
-            }
-
-            const finalNodes = graphData.nodes.filter(n => keepIdsSet.has(n.id));
-            const finalNodesIds = new Set(finalNodes.map(n => n.id));
-            const finalLinks = graphData.links.filter(l => finalNodesIds.has(l[1]) && finalNodesIds.has(l[3]));
-            const finalLinksIds = new Set(finalLinks.map(l => l[0]));
-
-            finalNodes.forEach(node => {
-                if (node.inputs) {
-                    node.inputs.forEach(input => {
-                        if (input.link && !finalLinksIds.has(input.link)) delete input.link;
+                if (graphData.links) {
+                    graphData.links.forEach(l => {
+                        if (l) linksMap[l[0]] = l; // l[0] 是 link_id
                     });
                 }
+
+                // 使用迭代（栈）代替递归，处理超大型工作流
+                const stack = Array.from(executedIds);
+                const visited = new Set(executedIds);
+
+                // 闭包函数：执行一轮溯源（包括标准链路和虚拟链路）
+                const traceOnce = () => {
+                    let added = false;
+                    while (stack.length > 0) {
+                        const currId = stack.pop();
+                        const node = nodesMap[currId];
+                        if (!node) continue;
+
+                        // --- A. 标准链路溯源 (Inputs -> Links -> OriginNode) ---
+                        if (node.inputs) {
+                            node.inputs.forEach(input => {
+                                if (input.link) {
+                                    const link = linksMap[input.link];
+                                    if (link) {
+                                        const originNodeId = link[1];
+                                        if (!visited.has(originNodeId)) {
+                                            visited.add(originNodeId);
+                                            keepIdsSet.add(originNodeId);
+                                            stack.push(originNodeId);
+                                            added = true;
+                                        }
+                                    }
+                                }
+                            });
+                        }
+
+                        // --- B. 虚拟链路溯源 (GetNode -> SetNode, Anywhere) ---
+                        // 逻辑：如果当前保留的是一个“获取”类节点，必须找到对应的“设置”类节点
+                        const type = node.type?.toLowerCase() || "";
+                        if (type.includes("get") || type.includes("anywhere")) {
+                            // 尝试从 widgets_values 中找到标签名
+                            const tags = (node.widgets_values || []).filter(v => typeof v === 'string' && v.length > 0);
+                            if (tags.length > 0) {
+                                graphData.nodes.forEach(potentialSet => {
+                                    if (visited.has(potentialSet.id)) return;
+                                    const pType = potentialSet.type?.toLowerCase() || "";
+                                    // 匹配：类型包含 Set 且拥有相同的 Tag
+                                    if (pType.includes("set") || pType.includes("anywhere")) {
+                                        const pTags = (potentialSet.widgets_values || []).filter(v => typeof v === 'string');
+                                        if (tags.some(t => pTags.includes(t))) {
+                                            visited.add(potentialSet.id);
+                                            keepIdsSet.add(potentialSet.id);
+                                            stack.push(potentialSet.id);
+                                            added = true;
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    return added;
+                };
+
+                // 循环溯源直到依赖链闭合
+                while (traceOnce()) {}
+                
+                // --- C. 特殊兜底：强制保留特定的参数节点 (如 GeneralInput) ---
+                graphData.nodes.forEach(n => {
+                    if (!keepIdsSet.has(n.id)) {
+                        const type = n.type || "";
+                        if (type === "GeneralInput" || type.includes("Parameter")) {
+                            keepIdsSet.add(n.id);
+                        }
+                    }
+                });
+            }
+
+            // 3. 筛选节点
+            const finalNodes = graphData.nodes.filter(n => keepIdsSet.has(n.id));
+            const finalNodesIds = new Set(finalNodes.map(n => n.id));
+
+            // 4. 筛选链接（只有两端节点都在保留列表中的链接才保留）
+            let finalLinks = [];
+            if (graphData.links) {
+                finalLinks = graphData.links.filter(l => 
+                    l && finalNodesIds.has(l[1]) && finalNodesIds.has(l[3])
+                );
+            }
+            const finalLinksIds = new Set(finalLinks.map(l => l[0]));
+
+            // 5. 清理残留的无效引用 (关键修复：确保结构完整，避免 ComfyUI 加载报错)
+            finalNodes.forEach(node => {
+                // 处理输入槽位
+                if (node.inputs) {
+                    node.inputs.forEach(input => {
+                        if (input.link && !finalLinksIds.has(input.link)) {
+                            input.link = null; // 断开指向已删除链接的引用
+                        }
+                    });
+                }
+                // 处理输出槽位
                 if (node.outputs) {
                     node.outputs.forEach(output => {
                         if (output.links) {
+                            // 只保留存在于 finalLinks 中的链接 ID
                             output.links = output.links.filter(linkId => finalLinksIds.has(linkId));
-                            if (output.links.length === 0) delete output.links;
+                        } else {
+                            // 即使没有链接，也确保该属性为数组，防止某些节点插件读取崩溃
+                            output.links = [];
                         }
                     });
                 }
             });
 
-            const newWorkflow = { ...graphData, nodes: finalNodes, links: finalLinks };
+            // 6. 生成新工作流对象
+            const newWorkflow = { 
+                ...graphData, 
+                nodes: finalNodes, 
+                links: finalLinks 
+            };
+
+            // 7. 执行下载
             const blob = new Blob([JSON.stringify(newWorkflow, null, 2)], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
@@ -379,9 +491,10 @@ app.registerExtension({
             a.download = `mecha_tracer_${mode}_${new Date().getTime()}.json`;
             a.click();
             URL.revokeObjectURL(url);
+
         } catch (e) {
             console.error("Mecha Tracer Export Error:", e);
-            alert("导出过程中发生错误，请查看控制台日志。");
+            alert("导出失败，请按F12查看控制台错误详情信息。");
         }
     }
 });
