@@ -18,7 +18,12 @@ An enhanced extension for ComfyUI designed to record, visualize, and extract the
 - **Duration Measurement**: Accurately records the execution time of each node (in seconds).
 - **Loop Support**: Supports looped nodes. Hover over the label to view all execution sequence numbers and cumulative duration for that node across multiple iterations.
 
-### 3. Intelligent Workflow Extraction (Export)
+### 3. Jump to Error Node
+- **Panel Button**: Click "⚠️ Jump to Error Node" to quickly center the canvas on the last node that caused an execution error.
+- **Right-click Menu**: Right-click on the canvas background and select "⚠️ Jump to Error Node" to jump. When an error record exists, the menu shows the node ID.
+- Automatically records the error node on execution failure for quick troubleshooting in large workflows.
+
+### 4. Intelligent Workflow Extraction (Export)
 Two export modes are provided to help you quickly save execution results:
 - **🛠️ Pure Path**: Saves ONLY the nodes actually executed in the current run. Ideal for analyzing logic.
 - **🔗 Logic Integrity**: **Recommended Mode**. Not only retains executed nodes but also automatically traces back all necessary ancestor nodes (e.g., model loaders, global parameters).
@@ -33,7 +38,7 @@ Two export modes are provided to help you quickly save execution results:
    - Check **ON** to start tracing; uncheck to stop recording (no impact on performance).
    - The panel is **draggable** and will remember its position on the screen.
 2. **Right-click Menu**:
-   - Right-click on the canvas background to quickly toggle the tracer, show/hide the panel, or clear records.
+   - Right-click on the canvas background to quickly toggle the tracer, show/hide the panel, clear records, or jump to the error node.
 3. **View Loops**:
    - If a node is executed multiple times (looping), hover your mouse over the label above the node to expand the full execution list.
 
@@ -53,6 +58,16 @@ Two export modes are provided to help you quickly save execution results:
 ## ⚖️ Performance
 
 This extension is implemented by hooking the LiteGraph rendering layer and **only executes during render frames**. It does not interfere with the ComfyUI backend's Python execution logic, making its impact on image generation speed negligible.
+
+---
+
+## 📝 Changelog
+
+### v0.2.0 (2025-02-01)
+- **Added**: Jump to Error Node
+  - Panel "Jump to Error Node" button
+  - Right-click menu "Jump to Error Node" option with error node ID display
+  - Auto-records error node on execution failure for quick troubleshooting in large workflows
 
 ---
 

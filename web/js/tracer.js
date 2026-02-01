@@ -17,7 +17,8 @@ const executionState = {
     orderCounter: 0,
     executedNodes: new Set(),
     lastNodeId: null,
-    hoveredNodeId: null // 新增：手动追踪悬停节点ID
+    hoveredNodeId: null, // 手动追踪悬停节点ID
+    lastErrorNodeId: null // 最近一次执行报错的节点ID，用于快速跳转
 };
 
 app.registerExtension({
@@ -73,6 +74,14 @@ app.registerExtension({
             if (!executionState.enabled) return;
             this.finalizeNodeTiming(detail.node);
             app.canvas.draw(true, true);
+        });
+
+        // 监听执行报错，记录报错节点ID用于快速跳转
+        api.addEventListener("execution_error", ({ detail }) => {
+            if (detail && detail.node_id != null) {
+                executionState.lastErrorNodeId = String(detail.node_id);
+                app.canvas.draw(true, true);
+            }
         });
 
         // --- 核心修复：手动检测鼠标位置以支持现代节点 (Vue) 悬停 ---
@@ -193,6 +202,22 @@ app.registerExtension({
         }
     },
 
+    jumpToErrorNode() {
+        const nodeId = executionState.lastErrorNodeId;
+        if (!nodeId) {
+            alert("暂无报错节点记录，请先运行工作流触发一次报错。");
+            return;
+        }
+        const graph = app.graph;
+        if (!graph) return;
+        const node = graph.getNodeById(Number(nodeId)) || graph.getNodeById(nodeId);
+        if (!node) {
+            alert(`未找到报错节点 (ID: ${nodeId})，可能已被删除或工作流已更改。`);
+            return;
+        }
+        app.canvas.centerOnNode(node);
+    },
+
     createTracerUI() {
         const id = "mecha-tracer-panel";
         if (document.getElementById(id)) return;
@@ -300,6 +325,13 @@ app.registerExtension({
         };
         container.appendChild(clearBtn);
 
+        const jumpErrorBtn = document.createElement("button");
+        jumpErrorBtn.innerText = "⚠️ Jump to Error Node";
+        jumpErrorBtn.style.cssText = btnStyle;
+        jumpErrorBtn.title = "快速跳转到最近一次报错的节点";
+        jumpErrorBtn.onclick = () => this.jumpToErrorNode();
+        container.appendChild(jumpErrorBtn);
+
         document.body.appendChild(container);
 
         const origGetCanvasMenuOptions = LGraphCanvas.prototype.getCanvasMenuOptions;
@@ -340,6 +372,10 @@ app.registerExtension({
                     executionState.orderCounter = 0;
                     app.canvas.draw(true, true);
                 }
+            });
+            options.push({
+                content: executionState.lastErrorNodeId ? `⚠️ Jump to Error Node (ID: ${executionState.lastErrorNodeId})` : "⚠️ Jump to Error Node",
+                callback: () => self.jumpToErrorNode()
             });
             return options;
         };
