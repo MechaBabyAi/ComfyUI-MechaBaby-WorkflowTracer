@@ -1,75 +1,88 @@
-# 🤖 机械宝宝工作流追踪器 (MechaBaby Workflow Tracer)
+# 🤖 MechaBaby Workflow Tracer
 
-[English](./README_EN.md) | **简体中文**
+**English** | [简体中文](./README_ZH.md)
 
-这是一个专为 ComfyUI 设计的增强型插件，旨在记录、可视化并提取工作流中的实际运行路径。它能帮助你从庞大复杂的工作流中精准“脱水”，提取出真正有效的逻辑片段。
-
----
-
-## 🌟 核心功能
-
-### 1. 路径实时可视化
-- **执行高亮**：正在运行的节点以黄色高亮显示，已完成的节点以绿色高亮显示。
-- **连线发光**：自动识别并点亮实际传输数据的连线，清晰展现数据流向。
-- **现代 UI 兼容**：完美支持 ComfyUI 的“现代节点设计 (Vue 节点)”。
-
-### 2. 精准执行统计
-- **运行序号**：直观标注每个节点的执行先后顺序。
-- **耗时测量**：精确记录每个节点的运行时间（单位：s）。
-- **循环支持**：支持循环节点，鼠标悬停即可查看该节点在多次迭代中的所有执行序号及累计耗时。
-
-### 3. 快速跳转报错节点
-- **面板按钮**：点击「⚠️ Jump to Error Node」可快速将画布聚焦到最近一次报错的节点。
-- **右键菜单**：画布空白处右键，选择「⚠️ Jump to Error Node」同样可跳转。若已有报错记录，菜单会显示对应节点 ID。
-- 执行出错时自动记录报错节点，方便在大工作流中快速定位问题。
-
-### 4. 智能工作流提取 (Export)
-提供两种导出模式，帮你快速保存运行结果：
-- **🛠️ 纯净路径 (Pure Path)**：仅保存本次运行中真正执行过的节点。适合分析逻辑。
-- **🔗 逻辑完整 (Logic Integrity)**：**推荐模式**。不仅保留执行过的节点，还会自动溯源所有必需的祖先节点（如模型加载、全局参数等）。
-  - **虚拟链路支持**：深度适配 `easy-use` (setNode/getNode) 及 `Anywhere` 节点，确保“隔空取物”的逻辑不丢失。
-  - **参数保护**：自动保留 `GeneralInput` 等全局参数节点，确保导出的 JSON 可直接加载运行。
+An enhanced extension for ComfyUI that records, visualizes, and extracts the actual execution path of a workflow. It helps you "dehydrate" large, complex workflows to keep only the logic that really ran.
 
 ---
 
-## 🚀 使用方法
+## 🌟 Core Features
 
-1. **面板控制**：
-   - 勾选 **ON** 开启追踪，取消勾选则停止记录（不影响运行效率）。
-   - 面板支持**自由拖拽**，并会自动记住你在屏幕上的摆放位置。
-2. **右键菜单**：
-   - 在画布空白处右键，可快速开启/关闭追踪器、显示/隐藏面板、清理记录或跳转报错节点。
-3. **查看循环**：
-   - 如果一个节点被多次运行（循环），将鼠标悬停在节点上方的标签上，即可展开查看完整的执行列表。
+### 1. Real-time Path Visualization
+- **Execution Highlighting**: The currently running node is highlighted in **yellow**. Completed nodes are colored by role (see Node & Link Colors below).
+- **Glowing Links**: Links that carried data between executed nodes are highlighted; link color indicates whether the source is a pure parameter source (orange), a parameter node (green), or a normal executed node (white).
+- **Modern UI Compatible**: Works with ComfyUI's "Modern Node Design (Vue Nodes)".
+
+### 2. Node & Link Colors
+After a run, nodes and links are styled to show data flow:
+
+| Type | Color | Meaning |
+|------|--------|--------|
+| **Currently running** | Yellow | Node currently executing |
+| **Pure parameter source** | Orange | Executed node with **no input** from other executed nodes (e.g. CheckpointLoader, Empty Latent, CLIP Text Encode with only text input). Label: "(纯参数源)" |
+| **Parameter node** | Green | Executed node whose **output** is used by at least one other executed node (e.g. model → KSampler, KSampler → VAE Decode). Label: "(参数)" |
+| **Normal executed node** | White | Executed node whose output is not used by any other executed node (e.g. Save Image, end of chain). |
+
+Links use the same colors: orange when the link comes from a pure parameter source, green when from a parameter node, white when from a normal executed node.
+
+### 3. Precise Execution Statistics
+- **Execution order**: Each node shows its execution sequence number(s).
+- **Duration**: Per-node run time in seconds; for looped nodes, hover to see all run numbers and total duration.
+- **Loop support**: Nodes that run multiple times show a compact list; hover to expand.
+
+### 4. Jump to Error Node
+- **Panel**: "⚠️ Jump to Error Node" focuses the canvas on the last node that caused an error.
+- **Right-click**: Same option on the canvas context menu; the menu shows the error node ID when available.
+- The error node is recorded automatically on execution failure.
+
+### 5. Workflow Export
+Two export modes:
+- **🛠️ Pure Path**: Saves only nodes that were executed in the current run. Good for analyzing what actually ran.
+- **🔗 Logic Integrity** (recommended): Keeps executed nodes and traces back all required ancestors (model loaders, global parameters, etc.).
+  - Supports virtual links (e.g. `easy-use` setNode/getNode, Anywhere nodes).
+  - Keeps nodes like `GeneralInput` so the exported JSON can be loaded and run as-is.
 
 ---
 
-## 🛠️ 安装
+## 🚀 How to Use
 
-1. 进入 ComfyUI 的插件目录：`ComfyUI/custom_nodes/`
-2. 克隆本项目：
+1. **Panel**: Check **ON** to enable tracing; uncheck to stop (no performance impact). The panel is draggable and its position is remembered.
+2. **Right-click**: On the canvas background you can toggle the tracer, show/hide the panel, clear records, or jump to the error node.
+3. **Loops**: If a node runs multiple times, hover over its label to see the full list of run numbers and total time.
+
+---
+
+## 🛠️ Installation
+
+1. Go to ComfyUI’s custom nodes directory: `ComfyUI/custom_nodes/`
+2. Clone this repo:
    ```bash
    git clone https://github.com/MechaBabyAi/ComfyUI-MechaBaby-WorkflowTracer.git
    ```
-3. 重启 ComfyUI。
+3. Restart ComfyUI.
 
 ---
 
-## ⚖️ 性能说明
+## ⚖️ Performance
 
-本插件通过劫持 LiteGraph 的渲染层实现，**仅在渲染帧执行**，不会干扰 ComfyUI 后端的 Python 执行逻辑，对图像生成速度的影响几乎可以忽略不计。
+The extension hooks only the LiteGraph rendering layer and runs during render frames. It does not change ComfyUI’s Python execution, so impact on generation speed is negligible.
 
 ---
 
-## 📝 更新日志
+## 📝 Changelog
+
+### v0.3.0 (2025-02-01)
+- **Added**: Parameter node tracking — nodes whose output is used by other executed nodes are highlighted in **green** and labeled "(参数)".
+- **Added**: Pure parameter source tracking — executed nodes with no input from other executed nodes are highlighted in **orange** and labeled "(纯参数源)".
+- **Changed**: Normal executed nodes (end of chain) are now highlighted in **white** for clearer contrast on dark backgrounds.
+- **Changed**: Link colors match source type: orange (pure source), green (parameter node), white (normal).
 
 ### v0.2.0 (2025-02-01)
-- **新增**：快速跳转到报错节点
-  - 面板增加「Jump to Error Node」按钮
-  - 右键菜单增加「Jump to Error Node」选项，可显示报错节点 ID
-  - 执行出错时自动记录报错节点，便于在大工作流中快速定位问题
+- **Added**: Jump to Error Node (panel button and right-click menu, with error node ID).
+- **Added**: Auto-recording of the error node on execution failure.
 
 ---
 
-## 🤝 鸣谢
-感谢所有提出改进建议的社区用户，特别是针对大模型工作流和逻辑完整性导出的深度反馈。
+## 🤝 Acknowledgments
+
+Thanks to everyone who suggested improvements, especially around large workflows and Logic Integrity export.

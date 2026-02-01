@@ -7,6 +7,8 @@ import { api } from "../../../scripts/api.js";
  * 1. 修复现代节点 (Vue) 下鼠标悬停无法展开序号的问题
  * 2. 修复循环节点的累计耗时计算逻辑
  * 3. 兼容现代节点 (Vue) 与经典节点的高亮显示
+ * 4. 参数节点追踪：区分「输出被其他已执行节点使用」的节点（参数/源节点）与普通执行节点
+ * 5. 纯参数源：已执行且没有任何输入来自其他已执行节点（数据流最上游）
  */
 
 const executionState = {
@@ -16,10 +18,56 @@ const executionState = {
     nodes: new Map(), // nodeId -> Array of { order, startTime, endTime, duration }
     orderCounter: 0,
     executedNodes: new Set(),
+    parameterNodes: new Set(), // 参数节点：已执行且其输出被其他已执行节点使用（如模型→KSampler）
+    pureParameterSourceNodes: new Set(), // 纯参数源：已执行且没有任何输入来自其他已执行节点（如 CheckpointLoader、Empty Latent）
     lastNodeId: null,
     hoveredNodeId: null, // 手动追踪悬停节点ID
     lastErrorNodeId: null // 最近一次执行报错的节点ID，用于快速跳转
 };
+
+/** 根据当前图与已执行节点集合，计算「参数节点」与「纯参数源」 */
+function computeParameterNodes() {
+    executionState.parameterNodes.clear();
+    executionState.pureParameterSourceNodes.clear();
+    const graph = app.graph;
+    if (!graph || !graph.links || executionState.executedNodes.size === 0) return;
+    const executed = executionState.executedNodes;
+    for (const nodeId of executed) {
+        const node = graph.getNodeById(Number(nodeId)) || graph.getNodeById(nodeId);
+        if (!node) continue;
+        let hasOutputToExecuted = false;
+        let hasInputFromExecuted = false;
+        if (node.outputs) {
+            for (const output of node.outputs) {
+                const links = output.links;
+                if (!links || links.length === 0) continue;
+                for (const linkId of links) {
+                    const link = graph.links[linkId];
+                    if (!link) continue;
+                    if (executed.has(String(link.target_id))) {
+                        hasOutputToExecuted = true;
+                        break;
+                    }
+                }
+                if (hasOutputToExecuted) break;
+            }
+        }
+        if (node.inputs) {
+            for (const input of node.inputs) {
+                const linkId = input.link;
+                if (linkId == null) continue;
+                const link = graph.links[linkId];
+                if (!link) continue;
+                if (executed.has(String(link.origin_id))) {
+                    hasInputFromExecuted = true;
+                    break;
+                }
+            }
+        }
+        if (hasOutputToExecuted) executionState.parameterNodes.add(String(nodeId));
+        if (!hasInputFromExecuted) executionState.pureParameterSourceNodes.add(String(nodeId));
+    }
+}
 
 app.registerExtension({
     name: "MechaBaby.WorkflowTracer",
@@ -31,6 +79,8 @@ app.registerExtension({
             executionState.nodes.clear();
             executionState.orderCounter = 0;
             executionState.executedNodes.clear();
+            executionState.parameterNodes.clear();
+            executionState.pureParameterSourceNodes.clear();
             executionState.running = true;
             executionState.lastNodeId = null;
             app.canvas.draw(true, true);
@@ -43,6 +93,7 @@ app.registerExtension({
             if (!nodeId) {
                 executionState.running = false;
                 this.finalizeNodeTiming(executionState.lastNodeId);
+                computeParameterNodes();
                 app.canvas.draw(true, true);
                 return;
             }
@@ -67,12 +118,14 @@ app.registerExtension({
             
             executionState.executedNodes.add(nodeId);
             executionState.lastNodeId = nodeId;
+            computeParameterNodes();
             app.canvas.draw(true, true);
         });
 
         api.addEventListener("executed", ({ detail }) => {
             if (!executionState.enabled) return;
             this.finalizeNodeTiming(detail.node);
+            computeParameterNodes();
             app.canvas.draw(true, true);
         });
 
@@ -101,12 +154,16 @@ app.registerExtension({
             ctx.save();
             const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 20;
             const isCurrent = executionState.lastNodeId === String(node.id) && executionState.running;
+            const isPureSource = executionState.pureParameterSourceNodes.has(String(node.id)); // 无输入来自其他已执行节点
+            const isParameter = executionState.parameterNodes.has(String(node.id)); // 输出被其他已执行节点使用
 
-            // 1. 绘制高亮边框
-            ctx.strokeStyle = isCurrent ? "#FFFF00" : "#00FF00";
+            // 1. 绘制高亮边框：当前运行=黄，纯参数源=橙，参数节点=绿，普通已执行=白
+            const borderColor = isCurrent ? "#FFFF00" : (isPureSource ? "#FFA500" : (isParameter ? "#00FF00" : "#FFFFFF"));
+            ctx.strokeStyle = borderColor;
             ctx.lineWidth = isCurrent ? 5 : 3;
-            ctx.shadowBlur = isCurrent ? 20 : 10;
-            ctx.shadowColor = isCurrent ? "#FFFF00" : "#00FF00";
+            const glowBlur = isCurrent ? 20 : (isParameter ? 14 : 10); // 参数节点略加强发光
+            ctx.shadowBlur = glowBlur;
+            ctx.shadowColor = borderColor;
             const margin = 3;
             ctx.strokeRect(-margin, -titleHeight - margin, node.size[0] + margin * 2, node.size[1] + titleHeight + margin * 2);
 
@@ -140,21 +197,32 @@ app.registerExtension({
             const labelHeight = 22;
             const labelX = -margin;
             const labelY = -titleHeight - margin - labelHeight - 2;
-            
+            const suffixPure = (isPureSource && !isCurrent) ? " (纯参数源)" : "";
+            const suffixParam = (!isPureSource && isParameter && !isCurrent) ? " (参数)" : "";
+            const extraW = suffixPure ? 58 : (suffixParam ? 38 : 0);
             ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
-            ctx.fillRect(labelX, labelY, tw + 15, labelHeight); 
+            ctx.fillRect(labelX, labelY, tw + 15 + extraW, labelHeight); 
             
             if (!isMouseOver && records.length > 4) {
                 ctx.fillStyle = "#666";
                 ctx.font = "10px sans-serif";
-                ctx.fillText(" (Hover to expand)", labelX + tw + 18, labelY + labelHeight / 2 + 1);
+                ctx.fillText(" (Hover to expand)", labelX + tw + 18 + extraW, labelY + labelHeight / 2 + 1);
             }
 
             ctx.font = "bold 14px sans-serif";
-            ctx.fillStyle = isCurrent ? "#FFFF00" : "#00FF00";
+            ctx.fillStyle = borderColor;
             ctx.textAlign = "left";
             ctx.textBaseline = "middle";
             ctx.fillText(fullTxt, labelX + 7, labelY + labelHeight / 2);
+            if (suffixPure) {
+                ctx.font = "10px sans-serif";
+                ctx.fillStyle = "#FFA500";
+                ctx.fillText(suffixPure, labelX + 7 + tw + 4, labelY + labelHeight / 2);
+            } else if (suffixParam) {
+                ctx.font = "10px sans-serif";
+                ctx.fillStyle = "#00FF00";
+                ctx.fillText(suffixParam, labelX + 7 + tw + 4, labelY + labelHeight / 2);
+            }
             ctx.restore();
         };
 
@@ -172,14 +240,18 @@ app.registerExtension({
             }
         });
 
-        // 劫持连线渲染
+        // 劫持连线渲染：已执行连线高亮；纯参数源连出=橙，参数节点连出=绿，普通=白
         const origDrawLink = LGraphCanvas.prototype.drawLink;
         LGraphCanvas.prototype.drawLink = function(ctx, a, b, link, ...args) {
             if (executionState.enabled && link && executionState.executedNodes.has(String(link.origin_id)) && executionState.executedNodes.has(String(link.target_id))) {
                 ctx.save();
+                const isPureSourceLink = executionState.pureParameterSourceNodes.has(String(link.origin_id));
+                const isParamLink = executionState.parameterNodes.has(String(link.origin_id));
+                const linkColor = isPureSourceLink ? "#FFA500" : (isParamLink ? "#00FF00" : "#FFFFFF");
                 ctx.shadowBlur = 8;
-                ctx.shadowColor = "#00FF00";
-                ctx.lineWidth = (args[0] || 2) * 1.5; 
+                ctx.shadowColor = linkColor;
+                ctx.strokeStyle = linkColor;
+                ctx.lineWidth = (args[0] || 2) * 1.5;
                 const r = origDrawLink.apply(this, [ctx, a, b, link, ...args]);
                 ctx.restore();
                 return r;
@@ -320,6 +392,8 @@ app.registerExtension({
         clearBtn.onclick = () => {
             executionState.nodes.clear();
             executionState.executedNodes.clear();
+            executionState.parameterNodes.clear();
+            executionState.pureParameterSourceNodes.clear();
             executionState.orderCounter = 0;
             app.canvas.draw(true, true);
         };
@@ -369,6 +443,8 @@ app.registerExtension({
                 callback: () => {
                     executionState.nodes.clear();
                     executionState.executedNodes.clear();
+                    executionState.parameterNodes.clear();
+                    executionState.pureParameterSourceNodes.clear();
                     executionState.orderCounter = 0;
                     app.canvas.draw(true, true);
                 }
