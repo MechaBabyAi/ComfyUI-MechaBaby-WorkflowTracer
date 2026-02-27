@@ -28,7 +28,7 @@ Documentation = "https://github.com/MechaBabyAi/ComfyUI-MechaBaby-WorkflowTracer
 "Bug Tracker" = "https://github.com/MechaBabyAi/ComfyUI-MechaBaby-WorkflowTracer/issues"
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "mechbaby"
 DisplayName = "ComfyUI-MechaBaby-WorkflowTracer"
 Icon = ""
 includes = [] 
